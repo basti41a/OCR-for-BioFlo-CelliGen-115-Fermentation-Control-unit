@@ -1,0 +1,348 @@
+# import necessary packages
+import os
+import cv2
+import csv
+import time
+import psutil
+import numpy as np
+from picamera import PiCamera
+import RPi.GPIO as GPIO
+from datetime import datetime
+import pytesseract
+from pytesseract import Output
+import matplotlib.pyplot as plt
+import tkinter as tk
+from tkinter import ttk
+import shutil
+
+# Defines a function, to get the available disk space
+def formatSize(bytes):
+    try:
+        bytes = float(bytes)
+        kb = bytes / 1024
+    except:
+        return "Error"
+    
+    if kb >= 1024:
+        M = kb / 1024
+        if M >= 1024:
+            G = M / 1024
+            return "%.2fGb" % (G)
+        else:
+            return "%.2fMb" % (M)
+    else:
+        return "%.2fkb" % (kb)
+usage = shutil.disk_usage("/home")
+free_space = formatSize(usage[2])
+
+
+def popupmsg(msg):
+    popup = tk.Tk()
+    popup.wm_title("Stop!")
+    label = ttk.Label(popup, text = msg)
+    label.pack(side = "top", fill = "x", pady = 20)
+    B1 = ttk.Button(popup, text = "Continue", command = popup.destroy)
+    B1. pack()
+    popup.mainloop()
+
+# define pause between measurements
+Measurament_intervall = 46 # ~15s for one cycle
+counter = 0
+
+# set working directory
+workingDirectory = r'/home/pi/Documents/recordings/'
+os.chdir(workingDirectory)
+
+# Set mode of GPIO Pins
+GPIO.setmode(GPIO.BOARD)
+
+# Setup of ServoMotor
+GPIO.setwarnings(False)
+ServoMotor_Pin = 11  # Pin Number 11 or GPIO.17
+GPIO.setup(ServoMotor_Pin, GPIO.OUT)
+pwm = GPIO.PWM(ServoMotor_Pin, 50)
+pwm.start(0)
+GPIO.setwarnings(False)
+
+# Servo Motor function
+def SetAngle(angle):
+    duty = angle / 18 + 2
+    GPIO.output(ServoMotor_Pin, True)
+    pwm.ChangeDutyCycle(duty)
+    time.sleep(1)
+    GPIO.output(ServoMotor_Pin, False)
+    pwm.ChangeDutyCycle(0)
+
+# camera setup
+camera = PiCamera(resolution = (3280, 2464))  # set resolution (max) resolution = (3280, 2464)
+camera.rotation = 180  # flip image, because camera is mounted upside down
+
+# setup of variables
+time_now_ = []
+elapsed_ = []
+counter_ = []
+Agitation_ = []
+Temperature_ = []
+Temperature_out_ = []
+pH_ = []
+DO_ = []
+
+# Pytesseract OCR setup
+# oem: OCR engine modes (0-4) | psm: page segmentation method (0-13) 
+custom_config = r'--oem 3 --psm 11'
+
+# takes picture and adds the counter to the filename
+def takePicture(counter):
+    camera.capture('/home/pi/Documents/KameraAufnahmen/' + 'img_' + str(counter) + '.jpg')
+
+# Define the header of the .txt export
+header = 'counter;Time;elapsed time;Agitation;Temperature;Temperature_Output;pH;DO'
+
+# create a .txt file and set header
+with open('Messwerte.txt', 'a') as myfile:
+    myfile.write(header + "\n")
+    myfile.close
+with open('rawData.txt', 'a') as myfile:
+    myfile.write(header + "\n")
+    myfile.close
+    
+print("Free disk space: ", free_space)
+print("A minimum of 10 Gb is required!")
+
+popupmsg("Did you delete all previos pictures? Also in the bin?")
+try:
+    Start = time.time()
+
+    print("Start: " + datetime.now().strftime("%d.%m.%Y %H:%M:%S"))
+    print("")
+    
+    # create infinity loop. Has to be aborted by hand through the user
+    while True:    
+        # Move Servo 70° = Touch the display
+        SetAngle(110)
+        # Move Servo - 70° = Move back to neutral position
+        SetAngle(180)    
+
+        # wait for 1s to ensure touchscreen is on
+        time.sleep(1)
+
+        # take picture and increase counter, so that the image is named "img_1.jpg", "img_2.jpg"...
+        takePicture(counter)    
+        time.sleep(3)  # waits for a few seconds until img is stored
+
+        # loads the image and converts to grey
+        img = cv2.imread(workingDirectory + 'img_' + str(counter) + '.jpg')
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # crop the image for easier handling
+        ####### x1: Start up | x2: end down| y1: Start width left| y2: width to right
+        img = img[700:1300, 800:2300]
+        
+        # get boundaries for single values
+        # Those have to be adjusted by hand for the respective screen cutout
+        Agit_1 = 120
+        Agit_2 = 220
+        Agit_3 = 600
+        Agit_4 = 860    
+        img_Agit = img[Agit_1:Agit_2, Agit_3:Agit_4] # Agitation
+    
+        Temp_1 = 250
+        Temp_2 = 350
+        Temp_3 = 600
+        Temp_4 = 850
+        img_Temp = img[Temp_1:Temp_2, Temp_3:Temp_4] # Temperature
+    
+        TempO_1 = 260
+        TempO_2 = 350
+        TempO_3 = 1170
+        TempO_4 = 1400
+        img_Temp_out = img[TempO_1:TempO_2, TempO_3:TempO_4] # Temperature Output
+    
+        pH_1 = 380
+        pH_2 = 480
+        pH_3 = 610
+        pH_4 = 850
+        img_pH = img[pH_1:pH_2, pH_3:pH_4] # pH
+    
+        DO_1 = 500
+        DO_2 = 610
+        DO_3 = 600
+        DO_4 = 850
+        img_DO = img[DO_1:DO_2, DO_3:DO_4] # DO
+        
+        # Check 
+        #img_Agit = img[120:220, 600:860] # Agit
+        #img_Temp = img[250:350, 600:850] # Temp
+        #img_Temp_out = img[130:230, 1200:1400] # Temp output
+        #img_pH = img[380:480, 610:850] # pH
+        #img_DO = img[500:610, 600:850] # DO    
+
+        # extracts the text from the images and filter '' values 
+        result_Agit = pytesseract.image_to_data(img_Agit, output_type = Output.DICT, config = custom_config)
+        result_Agit = list(filter(None, result_Agit['text']))
+        
+        result_Temp = pytesseract.image_to_data(img_Temp, output_type = Output.DICT, config = custom_config)
+        result_Temp = list(filter(None, result_Temp['text']))
+        
+        result_Temp_out = pytesseract.image_to_data(img_Temp_out, output_type = Output.DICT, config = custom_config)
+        result_Temp_out = list(filter(None, result_Temp_out['text']))
+        
+        result_pH = pytesseract.image_to_data(img_pH, output_type = Output.DICT, config = custom_config)
+        result_pH = list(filter(None, result_pH['text']))
+        
+        result_DO = pytesseract.image_to_data(img_DO, output_type = Output.DICT, config = custom_config)
+        result_DO = list(filter(None, result_DO['text']))             
+        
+        # convert to float and set min / max values for variables. Set NaN (np.nan)
+        # Agitation
+        if len(result_Agit) > 0:        
+            try:
+                Agitation = float(result_Agit[0])
+                if (Agitation > 1500) or (Agitation < 100):
+                    Agitation = np.nan
+            except ValueError:
+                Agitation = np.nan
+        else:
+            Agitation = np.nan        
+        
+        # Temperature
+        if len(result_Temp) > 0:        
+            try:
+                Temperatur = float(result_Temp[0])
+                if (Temperatur > 100) or (Temperatur < 0):
+                    Temperatur = np.nan
+            except ValueError:
+                Temperatur = np.nan
+        else:
+            Temperatur = np.nan
+            
+            # Temperature output
+        if len(result_Temp_out) > 0:        
+            try:
+                Temperatur_out = float(result_Temp_out[0])
+                if (Temperatur_out > 100) or (Temperatur_out < -100):
+                    Temperatur_out = np.nan
+            except ValueError:
+                Temperatur_out = np.nan
+        else:
+            Temperatur_out = np.nan
+            
+        # pH     
+        if len(result_pH) > 0:    
+            try:
+                pH = float(result_pH[0])
+                if (pH > 12) or (pH < 5):
+                    pH = np.nan
+            except ValueError:
+                pH = np.nan
+        else:
+            pH = np.nan       
+        
+        # DO
+        if len(result_DO) > 0:       
+            try:
+                DO = float(result_DO[0])
+                if (DO > 100) or (DO < 0):
+                    DO = np.nan
+            except ValueError:
+                DO = np.nan
+        else:
+            DO = np.nan
+        
+
+        # Define list for the variables to be stored in
+        time_now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")    
+        elapsed = round(time.time() - Start, 1)      
+        
+        Values = [counter, time_now, elapsed, Agitation, Temperatur, Temperatur_out, pH, DO]
+        print("Images taken:           ", counter + 1)
+        print("Time:                   ", time_now)
+        print("Time elapsed [s]:       ", elapsed)
+        print("Time elapsed [h]:       ", round(elapsed/3600, 2)) # divide seconds by 3600 to get hours, round to 2 digits
+        print("Agitation [rpm]         ", Agitation)    
+        print("Temperature [°C]:       ", Temperatur)    
+        print("Temperature Output [%]: ", Temperatur_out)
+        print("pH [-]                  ", pH)
+        print("DO [%]                  ", DO)
+        print("")    
+        
+        # store values to list
+        counter_.append(counter)
+        time_now_.append(time_now)
+        elapsed_.append(elapsed)
+        Agitation_.append(Agitation)
+        Temperature_.append(Temperatur)
+        Temperature_out_.append(Temperatur_out)
+        pH_.append(pH)
+        DO_.append(DO)    
+
+         # Create a .txt, write the values and save as "Messwerte.txt"
+        with open("rawData.txt", "a", newline = '') as myfile:
+            wr = csv.writer(myfile, delimiter = ';')        
+            wr.writerow(Values)
+            
+        with open("rawData.txt", "r") as file_in:
+            data = file_in.read().replace('.', ',').replace('-', '.').replace('nan', '')
+        
+        with open('Messwerte.txt', 'w') as file_out:
+            file_out.write(data)
+            
+        ### Data visualisation ###
+        
+        # Agitation
+        plt.figure(1)
+        plt.plot(elapsed_, Agitation_)
+        plt.title("Agitation")
+        plt.xlabel("elapsed time [s]")
+        plt.ylabel("Agitation [RPM]")
+        axes = plt.gca()
+        #axes.set_ylim([0, 1200])    
+        
+        # Temperature
+        plt.figure(2)
+        plt.plot(elapsed_, Temperature_)
+        plt.title("Temperature")
+        plt.xlabel("elapsed time [s]")
+        plt.ylabel("Temperatur [°C]")
+        axes = plt.gca()
+        axes.set_ylim([25, 50])
+        
+        # Temperature_Output
+        plt.figure(3)
+        plt.plot(elapsed_, Temperature_out_)
+        plt.title("Temperature Output [%]")
+        plt.xlabel("elapsed time [s]")
+        plt.ylabel("Temperatur Output [%]")
+        axes = plt.gca()
+        #axes.set_ylim([20, 80])
+        
+        # pH
+        plt.figure(4)
+        plt.plot(elapsed_, pH_)
+        plt.title("pH")
+        plt.xlabel("elapsed time [s]")
+        plt.ylabel("pH [-]")
+        axes = plt.gca()
+        #axes.set_ylim([4, 12])
+        
+        # DO
+        plt.figure(5)
+        plt.plot(elapsed_, DO_)
+        plt.title("Dissolved Oxygen")
+        plt.xlabel("elapsed time [s]")
+        plt.ylabel("Dissolved Oxygen [%]")
+        axes = plt.gca()
+        #axes.set_ylim([0, 100])
+        
+        # draws the plot
+        plt.draw()
+        plt.pause(1)      
+        
+        # waits until next picture is taken (programm needs approx. 13s for a run)
+        time.sleep(Measurament_intervall)
+        counter = counter + 1 
+except KeyboardInterrupt:
+    pass
+time.sleep(0.5)
+print("Recording aborted!")
+print("Number of readings: ", counter)
