@@ -2,7 +2,10 @@
 In order to constantly monitor the process parameters (such as temperature, pH, oxygen saturation and stirrer speed) during a fermentation with the Bioflo®/ Celligen® 115 Bioreactor, expensive software is normally required. Since this was not available to us, I built an automatic optical character recognition (OCR) software using a raspberryPi camera, which can automatically read and save exactly these values. 
 
 ## Setup
-The camera takes a picture of the touchscreen roughly every minute and automatically reads out the values, stores them and displays them as an image on an external monitor. For this purpose, a 3D printer was used to build a holder with which the Picam can focus on the screen. With the library 'pytesseract' the values could be read out automatically. Since the screen saver of the device started after about 10 minutes, a small servo motor had to be mounted onto the controlling unit, which touched the screen before each recording, to avoid a black screen during the screensaver.
+The camera takes a picture of the touchscreen roughly every minute and automatically reads out the values, stores them and displays them as an image on an external monitor. For this purpose, a 3D printer was used to build a holder with which the Picam can focus on the screen (https://www.thingiverse.com/thing:2842300). With the library 'pytesseract' the values could be read out automatically. 
+
+
+Since the screen saver of the device started after about 10 minutes, a small servo motor had to be mounted onto the controlling unit with a 3D printed encasing (https://www.thingiverse.com/thing:3121101), which touched the screen before each recording, to avoid a black screen during the screensaver.
 
 |Setup|
 |--|
